@@ -5,7 +5,8 @@
         "version": "3.4.0",
         "requirements": [
                 "pillow",
-                "boto3>=1.9.69"
+                "boto3>=1.9.69",
+                "aws-requests-auth==0.4.3"
         ],
         "codeowners": [
                 "@robmarkcole"
