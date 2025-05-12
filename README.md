@@ -60,7 +60,7 @@ aws rekognition index-faces \
   --region eu-west-1 \
   --collection-id MyCollection \
   --image-bytes fileb://./person1.jpg \
-  --external-image-id person1 \
+  --external-image-id person1
 
 ```
 
