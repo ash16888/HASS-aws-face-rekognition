@@ -9,7 +9,7 @@ plus the current timestamp.
 Example configuration (configuration.yaml)
 -----------------------------------------
 image_processing:
-  - platform: rekognition_face          # you may keep the platform name that   
+  - platform: rekognition_face          # you may keep the platform name that
                                         # the original custom component uses
     name: "Front Door Faces"
     aws_access_key_id: YOUR_KEY_ID
@@ -20,12 +20,11 @@ image_processing:
     collection_id: homeassistant_faces  # REQUIRED: name of your Rekognition collection
     similarity_threshold: 90            # OPTIONAL: default 90 (0‑100)
 
-    # (optional) save annotated images and/or upload to S3 – these settings
-    # are kept from the original component and still work here
+    # (optional) save annotated images
     save_file_folder: "/config/www/rekognition"
     save_timestamped_file: true
     always_save_latest_file: true
-    s3_bucket: my‑hass‑images
+
 
     source:
       - entity_id: camera.front_door
@@ -41,8 +40,7 @@ How it works
     * `timestamp` – ISO date‑time of the recognition.
 * `state` is the number of recognised faces. Attributes include the list of
   matches and `last_face_recognition` timestamp.
-* Optional: the frame can be annotated with bounding boxes and saved locally or
-  uploaded to S3 exactly like in the original component.
+* Optional: the frame can be annotated with bounding boxes and saved locally.
 
 """
 from __future__ import annotations
@@ -131,9 +129,9 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         # keep original optional keys for saving images, etc.
         vol.Optional(CONF_SAVE_FILE_FOLDER): cv.isdir,
         vol.Optional(CONF_SAVE_FILE_FORMAT, default="jpg"): vol.In(["jpg", "png"]),
-        vol.Optional(CONF_SAVE_TIMESTAMPTED_FILE, default=False): cv.boolean,
-        vol.Optional(CONF_ALWAYS_SAVE_LATEST_FILE, default=False): cv.boolean,
-        vol.Optional(CONF_SHOW_BOXES, default=True): cv.boolean,
+        vol.Optional(CONF_SAVE_TIMESTAMPTED_FILE, default=True): cv.boolean,
+        vol.Optional(CONF_ALWAYS_SAVE_LATEST_FILE, default=True): cv.boolean,
+        vol.Optional(CONF_SHOW_BOXES, default=False): cv.boolean,
     }
 )
 
@@ -253,134 +251,190 @@ class FaceRecognitionEntity(ImageProcessingEntity):
 
     # ───────── Core logic ─────────
 
-    def process_image(self, image):
-        """Send frame to AWS Rekognition and process the response."""
-        try:
-            # Попытка отправить изображение в AWS Rekognition
-            response = self._client.search_faces_by_image(
-                CollectionId=self._collection_id,
-                Image={"Bytes": image},
-                FaceMatchThreshold=self._similarity_threshold,
-                MaxFaces=3,
-            )
-            _LOGGER.debug(f"'{self.entity_id}': AWS Rekognition API call successful. Response: {response}")
+    def process_image(self, image_bytes): # Рекомендуется переименовать аргумент для ясности
+            """Send frame to AWS Rekognition and process the response."""
+            try:
+                # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+                # Преобразование байтов изображения в объект PIL.Image и сохранение его
+                try:
+                    img_pil = Image.open(io.BytesIO(image_bytes))
+                    self._image = img_pil  # Сохраняем объект PIL.Image для последующего использования
+                except UnidentifiedImageError:
+                    _LOGGER.error(f"'{self.entity_id}': Не удалось распознать изображение из байтов.")
+                    self._image = None # Убедимся, что _image сброшен, если изображение невалидно
+                    # Если изображение не удалось загрузить, дальнейшая обработка и сохранение невозможны
+                    return 
+                except Exception as e:
+                    _LOGGER.error(f"'{self.entity_id}': Ошибка при открытии изображения из байтов: {e}")
+                    self._image = None
+                    return
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
-            # Обработка успешного ответа от AWS (если не было исключений)
-            self._matches = []
-            for match in response.get("FaceMatches", []):
-                similarity = match.get("Similarity", 0.0)
-                face_data = match.get("Face", {}) 
-                ext_id = face_data.get("ExternalImageId", "unknown")
-                face_id = face_data.get("FaceId")
-                bounding_box = face_data.get("BoundingBox") # BoundingBox из ответа SearchFacesByImage
-                
-                self._matches.append(
-                    {
-                        "external_image_id": ext_id,
-                        "face_id": face_id,
-                        "similarity": round(similarity, 2),
-                        "bounding_box": bounding_box # Сохраняем для аннотации
-                    }
+                # Попытка отправить изображение в AWS Rekognition
+                # Используем image_bytes для AWS, так как он ожидает байты
+                response = self._client.search_faces_by_image(
+                    CollectionId=self._collection_id,
+                    Image={"Bytes": image_bytes}, # Используем оригинальные байты изображения
+                    FaceMatchThreshold=self._similarity_threshold,
+                    MaxFaces=3,
                 )
-            self._state = len(self._matches)
-            if self._state > 0:
-                 _LOGGER.info(f"'{self.entity_id}': Successfully matched {self._state} face(s).")
-            else:
-                 # Это случай, когда AWS обработал изображение, но не нашел совпадений в коллекции
-                 _LOGGER.info(f"'{self.entity_id}': No faces matched from the collection (though faces might have been detected in the image by AWS). State is 0.")
+                _LOGGER.debug(f"'{self.entity_id}': Вызов AWS Rekognition API успешен. Ответ: {response}")
 
-        except self._client.exceptions.InvalidParameterException as e:
-            # Проверяем текст ошибки, чтобы убедиться, что это именно та проблема
-            error_message = str(e).lower()
-            if "no faces in the image" in error_message or \
-               "there are no faces in the image" in error_message:
-                _LOGGER.info(
-                    f"'{self.entity_id}': AWS Rekognition reported no faces detected in the provided image. Setting state to 0. Error: {e}"
+                # (остальная часть вашего метода process_image без изменений)
+                # ...
+                self._matches = []
+                for match in response.get("FaceMatches", []):
+                    similarity = match.get("Similarity", 0.0)
+                    face_data = match.get("Face", {}) 
+                    ext_id = face_data.get("ExternalImageId", "unknown")
+                    face_id = face_data.get("FaceId")
+                    bounding_box = face_data.get("BoundingBox")
+                    
+                    self._matches.append(
+                        {
+                            "external_image_id": ext_id,
+                            "face_id": face_id,
+                            "similarity": round(similarity, 2),
+                            "bounding_box": bounding_box
+                        }
+                    )
+                self._state = len(self._matches)
+                if self._state > 0:
+                    _LOGGER.info(f"'{self.entity_id}': Успешно сопоставлено {self._state} лицо(лиц).")
+                else:
+                    _LOGGER.info(f"'{self.entity_id}': Лица из коллекции не сопоставлены (хотя лица могли быть обнаружены AWS в изображении). Состояние равно 0.")
+
+            except self._client.exceptions.InvalidParameterException as e:
+                error_message = str(e).lower()
+                if "no faces in the image" in error_message or \
+                "there are no faces in the image" in error_message:
+                    _LOGGER.info(
+                        f"'{self.entity_id}': AWS Rekognition сообщил об отсутствии лиц на предоставленном изображении. Установка состояния на 0. Ошибка: {e}"
+                    )
+                    self._matches = []
+                    self._state = 0
+                else:
+                    _LOGGER.error(
+                        f"'{self.entity_id}': AWS Rekognition InvalidParameterException во время SearchFacesByImage: {e}"
+                    )
+                    self._matches = [] 
+                    self._state = 0 
+            except Exception as e:
+                _LOGGER.error(
+                    f"'{self.entity_id}': Общая ошибка во время AWS Rekognition SearchFacesByImage: {e}"
                 )
                 self._matches = []
-                self._state = 0  # Явно устанавливаем состояние в 0 найденных/совпавших лиц
-            else:
-                # Другая ошибка InvalidParameterException
-                _LOGGER.error(
-                    f"'{self.entity_id}': AWS Rekognition InvalidParameterException during SearchFacesByImage: {e}"
-                )
-                self._matches = [] 
-                self._state = 0 # Безопасное значение по умолчанию
-        except Exception as e:  # Ловим другие возможные ошибки при вызове AWS (например, сетевые)
-            _LOGGER.error(
-                f"'{self.entity_id}': Generic error during AWS Rekognition SearchFacesByImage: {e}"
-            )
-            self._matches = []
-            self._state = 0  # Устанавливаем состояние в 0 при ошибке
-        
-        # Теперь self._state и self._matches установлены в зависимости от результата вызова API
-        _LOGGER.debug(f"'{self.entity_id}': Internal state after API call processing: {self._state}, Matches: {len(self._matches)}")
+                self._state = 0
+            _LOGGER.debug(f"'{self.entity_id}': Внутреннее состояние после обработки вызова API: {self._state}, Совпадения: {len(self._matches)}")
 
-        # Логика срабатывания события и сохранения изображения остается ниже,
-        # она будет использовать обновленные self._state и self._matches.
+            if self._state and self._state > 0:
+                self._last_detection = dt_util.now().isoformat()
+                for match_data in self._matches:
+                    event_data = match_data.copy()
+                    event_data["entity_id"] = self.entity_id
+                    event_data["timestamp"] = self._last_detection
+                    self.hass.bus.fire(EVENT_FACE_RECOGNISED, event_data)
+                    _LOGGER.debug(f"'{self.entity_id}': Сгенерировано событие {EVENT_FACE_RECOGNISED} с данными: {event_data}")
+            elif self._state == 0:
+                _LOGGER.info(f"'{self.entity_id}': Конечное состояние равно 0. Событие '{EVENT_FACE_RECOGNISED}' не будет сгенерировано.")
 
-        if self._state and self._state > 0: # Убедимся, что self._state не None и > 0
-            self._last_detection = dt_util.now().isoformat()
-            # ... (остальная часть логики события) ...
-            for match_data in self._matches: # Используем match_data, чтобы не конфликтовать с match из внешнего цикла, если он есть
-                event_data = match_data.copy()
-                event_data["entity_id"] = self.entity_id
-                event_data["timestamp"] = self._last_detection
-                self.hass.bus.fire(EVENT_FACE_RECOGNISED, event_data)
-                _LOGGER.debug(f"'{self.entity_id}': Fired event {EVENT_FACE_RECOGNISED} with data: {event_data}")
-        elif self._state == 0:
-             _LOGGER.info(f"'{self.entity_id}': Final state is 0. No '{EVENT_FACE_RECOGNISED}' event will be fired.")
-
-
-        if self._save_file_folder and (
-            (self._matches and len(self._matches) > 0) or self._always_save_latest_file
-        ):
-            self._save_annotated_image()
-            _LOGGER.debug(f"'{self.entity_id}': Annotated image saving process triggered.")
-        
-        _LOGGER.debug(f"'{self.entity_id}': Image processing finished.")
-
-    # ───────── Helpers ─────────
+            # Убедимся, что self._image было успешно установлено перед попыткой сохранения
+            if self._image and self._save_file_folder and (
+                (self._matches and len(self._matches) > 0) or self._always_save_latest_file
+            ):
+                self._save_annotated_image()
+                _LOGGER.debug(f"'{self.entity_id}': Запущен процесс сохранения аннотированного изображения.")
+            elif not self._image and self._save_file_folder:
+                _LOGGER.warning(f"'{self.entity_id}': Процесс сохранения изображения пропущен, так как self._image не установлено (возможно, из-за ошибки загрузки изображения).")
+            _LOGGER.debug(f"'{self.entity_id}': Обработка изображения завершена.")
+        # ───────── Helpers ─────────
 
     def _save_annotated_image(self):
-        """Draw bounding boxes around recognised faces and save the image."""
-        if not self._image:
-            return
+            """Draw bounding boxes around recognised faces and save the image."""
+            if not self._image:
+                _LOGGER.debug(f"'{getattr(self, 'entity_id', self._name)}': _save_annotated_image aborted, self._image is None.")
+                return
 
-        img = self._image.convert("RGB")
-        draw = ImageDraw.Draw(img)
+            if not self.entity_id:
+                _LOGGER.error(f"'{self._name or 'UnknownRekognitionEntity'}': entity_id is not available, cannot save image because object_id cannot be derived.")
+                return
 
-        for match in self._matches:
-            # Retrieve bounding boxes via IndexFaces? SearchFacesByImage returns box.
-            # Box coordinates are within match["Face"] -> "BoundingBox" but *only*
-            # if you indexed faces with bounding boxes; to be safe we draw when present.
-            bbox = match.get("bounding_box") or match.get("Face", {}).get("BoundingBox")
-            if not bbox or not self._show_boxes:
-                continue
-            y_min, x_min, height, width = (
-                bbox["Top"],
-                bbox["Left"],
-                bbox["Height"],
-                bbox["Width"],
+            try:
+                current_object_id = split_entity_id(self.entity_id)[1]
+            except Exception as e:
+                _LOGGER.error(f"'{self.entity_id}': Error splitting entity_id to get object_id: {e}")
+                return
+
+            img = self._image.convert("RGB")
+            draw = ImageDraw.Draw(img)
+
+            for match in self._matches:
+                bbox = match.get("bounding_box") or match.get("Face", {}).get("BoundingBox")
+                if not bbox or not self._show_boxes:
+                    continue
+                # Координаты из BoundingBox AWS Rekognition: Top, Left, Height, Width (относительные)
+                img_width, img_height = img.size
+                x_min_abs = bbox["Left"] * img_width
+                y_min_abs = bbox["Top"] * img_height
+                box_width_abs = bbox["Width"] * img_width
+                box_height_abs = bbox["Height"] * img_height
+                
+                # Преобразуем в (y_min, x_min, y_max, x_max) для draw_box, ожидающего (top, left, bottom, right)
+                # draw_box ожидает абсолютные координаты (y_min, x_min, y_max, x_max)
+                # draw_box (draw, box, image_width, image_height, text=None, color=(255, 255, 0))
+                # box: (y_min, x_min, y_max, x_max) - относительные к размерам изображения, переданным в draw_box
+                # В вашем случае, если draw_box ожидает относительные координаты, а BoundingBox уже относительный,
+                # то можно передавать их напрямую, если формат совпадает.
+                # Однако, draw_box из homeassistant.util.pil ожидает абсолютные координаты.
+                # Посмотрим на реализацию homeassistant.util.pil.draw_box - она сама масштабирует.
+                # def draw_box(draw, box, img_width, img_height, text="", color=BOX_COLOR):
+                #    y_min, x_min, y_max, x_max = box
+                #    (left, right, top, bottom) = (
+                #        x_min * img_width,
+                #        x_max * img_width,
+                #        y_min * img_height,
+                #        y_max * img_height,
+                #    )
+                # Значит, BoundingBox от AWS нужно преобразовать в (y_min, x_min, y_max, x_max) в ОТНОСИТЕЛЬНЫХ долях
+                y_min_rel = bbox["Top"]
+                x_min_rel = bbox["Left"]
+                y_max_rel = bbox["Top"] + bbox["Height"]
+                x_max_rel = bbox["Left"] + bbox["Width"]
+
+                draw_box(
+                    draw,
+                    (y_min_rel, x_min_rel, y_max_rel, x_max_rel), # относительные координаты
+                    img_width,  # передаем актуальные размеры изображения
+                    img_height, # передаем актуальные размеры изображения
+                    text=f"{match['external_image_id']}: {match['similarity']:.1f}%",
+                )
+
+            # Убедимся, что папка для сохранения существует (хотя это должно проверяться при запуске)
+            if not self._save_file_folder.exists():
+                try:
+                    self._save_file_folder.mkdir(parents=True, exist_ok=True)
+                    _LOGGER.info(f"'{self.entity_id}': Created save folder: {self._save_file_folder}")
+                except Exception as e:
+                    _LOGGER.error(f"'{self.entity_id}': Failed to create save folder {self._save_file_folder}: {e}")
+                    return # Не можем сохранить, если папка не создана
+
+            filename_latest = (
+                self._save_file_folder / f"{current_object_id}_latest.{self._save_file_format or 'jpg'}"
             )
-            draw_box(
-                draw,
-                (y_min, x_min, y_min + height, x_min + width),
-                img.width,
-                img.height,
-                text=f"{match['external_image_id']}: {match['similarity']:.1f}%",
-            )
+            try:
+                img.save(filename_latest)
+                _LOGGER.debug(f"'{self.entity_id}': Saved annotated image to %s", filename_latest)
+            except Exception as e:
+                _LOGGER.error(f"'{self.entity_id}': Failed to save latest image to %s: %s", filename_latest, e)
+                # Не будем прерывать, если не удалось сохранить latest, возможно, timestamped сохранится
 
-        filename_latest = (
-            self._save_file_folder / f"{self.object_id}_latest.{self._save_file_format}"
-        )
-        img.save(filename_latest)
-        _LOGGER.debug("Saved annotated image to %s", filename_latest)
-
-        if self._matches and self._save_timestamped_file:
-            ts = dt_util.now().strftime(DATETIME_FORMAT)
-            filename = (
-                self._save_file_folder / f"{self.object_id}_{ts}.{self._save_file_format}"
-            )
-            img.save(filename)
-            _LOGGER.info("Saved timestamped image to %s", filename)
+            if self._matches and self._save_timestamped_file:
+                ts = dt_util.now().strftime(DATETIME_FORMAT)
+                filename_timestamped = (
+                    self._save_file_folder / f"{current_object_id}_{ts}.{self._save_file_format or 'jpg'}"
+                )
+                try:
+                    img.save(filename_timestamped)
+                    _LOGGER.info(f"'{self.entity_id}': Saved timestamped image to %s", filename_timestamped)
+                except Exception as e:
+                    _LOGGER.error(f"'{self.entity_id}': Failed to save timestamped image to %s: %s", filename_timestamped, e)
