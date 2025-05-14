@@ -44,14 +44,14 @@ Configuration variables:
 
 
 ## Add collection and index faces
-With AWS cli 
-add envs AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY 
+With AWS CLI create collection
+
 ```
 aws rekognition create-collection \
  --collection-id MyCollection \
  --region eu-west-1
 ```
-than index faces
+than index face
 ```
 aws rekognition index-faces \
   --region eu-west-1 \
@@ -62,7 +62,7 @@ aws rekognition index-faces \
 ```
 
 ## Events
-Every time an image is processed,  event are published. The events can be viewed via the HA UI from `Developer tools -> EVENTS -> :Listen to events`. The events are:
+Every time an image is processed,  event are published. The events can be viewed via the HA UI from `Developer tools -> EVENTS -> :Listen to events`. The event is:
 
 `rekognition.face_recognised`: contains all the data associated with an object.
 
