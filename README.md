@@ -22,11 +22,9 @@ image_processing:
     aws_secret_access_key: AWS_SECRET_ACCESS_KEY
     region_name: eu-west-1 # optional region, default is us-east-1
     similarity_threshold: 90 # OPTIONAL: default 90 (0‑100)
-    collection_id: homeassistant_faces    
-    save_file_format: png
+    collection_id: homeassistant_faces     
     save_file_folder: /config/www/amazon-rekognition/ # Optional image storage
     save_timestamped_file: True # Set True to save timestamped images, default False
-    s3_bucket: my_already_existing_bucket
     always_save_latest_file: True
     source:
       - entity_id: camera.local_file
@@ -41,7 +39,6 @@ Configuration variables:
 - **save_file_format**: (Optional, default `jpg`, alternatively `png`) The file format to save images as. `png` generally results in easier to read annotations.
 - **save_file_folder**: (Optional) The folder to save processed images to. Note that folder path should be added to [whitelist_external_dirs](https://www.home-assistant.io/docs/configuration/basic/)
 - **save_timestamped_file**: (Optional, default `False`, requires `save_file_folder` to be configured) Save the processed image with the time of detection in the filename.
-- **s3_bucket**: (Optional, requires `save_timestamped_file` to be True) Backup the timestamped file to an S3 bucket (must already exist)
 - **always_save_latest_file**: (Optional, default `False`, requires `save_file_folder` to be configured) Always save the last processed image, even if there were no detections.
 - **source**: Must be a camera.
 
@@ -78,17 +75,18 @@ These events can be used to trigger automations, increment counters etc.
 Example automation to send a  notification when person is a new recognized. Then in `automations.yaml` I have:
 
 ```yaml
-- id: '3287784389530'
+- id: '0'
   alias: Rekognition person alert  
   triggers:
     - event_type: rekognition.face_recognised
       event_data:
         external_image_id: person1
       trigger: event
-  actions:
-    - data:
-        message: person1 recognized {{ now().strftime('%H:%M%d.%m.%Y') }}
-      action: notify.telegram_notifier
+  action:
+    service: telegram_bot.send_photo
+    data_template:
+      caption: Person detected by rekognition
+      file: '/config/www/rekognition_my_cam_latest.jpg'
       
 ```
 
