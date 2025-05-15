@@ -1,4 +1,4 @@
-# Amazon Rekognition for Home Assistant
+# Amazon Face Rekognition for Home Assistant
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
 Face recogntion with [Amazon Rekognition](https://aws.amazon.com/rekognition/).  The state is the count of faces recognized from your AWS Rekognition Face Collection, meeting a configured similarity threshold. 
